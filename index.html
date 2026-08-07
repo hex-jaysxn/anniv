@@ -953,11 +953,12 @@
   ];
   const gallery = document.getElementById('gallery');
   captions.forEach((cap, i) => {
+    const slot = i + 1;
     const card = document.createElement('label');
     card.className = 'polaroid';
     card.innerHTML = `
       <div class="photo-slot">
-        <img src="assets/photos/${i+1}.jpg" alt="${cap}" loading="lazy">
+        <img alt="${cap}" loading="lazy">
         <div class="placeholder-inner">
           <span class="plus">＋</span>
           <span class="hint">tap to add photo</span>
@@ -968,14 +969,48 @@
     `;
     const input = card.querySelector('input');
     const img = card.querySelector('img');
-    img.addEventListener('error', () => { img.style.display = 'none'; }, { once:true });
+
+    // Load order: saved photo from storage -> bundled asset -> placeholder stays visible
+    img.style.display = 'none';
+    img.addEventListener('load', () => { img.style.display = 'block'; });
+    img.addEventListener('error', function onErr(){
+      if(img.dataset.stage === 'stored'){
+        img.dataset.stage = 'asset';
+        img.src = `assets/photos/${slot}.jpg`;
+      } else {
+        img.style.display = 'none';
+      }
+    });
+    img.dataset.stage = 'stored';
+    img.src = `/api/photo?slot=${slot}`;
+
     input.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if(!file) return;
       const reader = new FileReader();
-      reader.onload = (ev) => {
-        img.src = ev.target.result;
+      reader.onload = async (ev) => {
+        const dataUrl = ev.target.result;
+        // Instant local preview while it saves
+        img.dataset.stage = 'stored';
+        img.src = dataUrl;
         img.style.display = 'block';
+
+        try {
+          const res = await fetch('/api/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slot, dataUrl })
+          });
+          if(!res.ok){
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'Upload failed');
+          }
+          // Re-point at the saved version so it's the single source of truth
+          img.src = `/api/photo?slot=${slot}&t=${Date.now()}`;
+        } catch(err){
+          console.error('Photo upload failed:', err);
+          alert("This photo is showing for you, but it couldn't be saved to the gallery for everyone else. Please check your connection and try again.");
+        }
       };
       reader.readAsDataURL(file);
     });
